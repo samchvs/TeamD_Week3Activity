@@ -1,0 +1,31 @@
+-- **************************************************************
+-- INFORMATION REPORT: CARDHOLDERS 
+-- **************************************************************
+
+-- ==============================================================
+-- PURPOSE: Count rows AND all data quality issues
+-- ==============================================================
+-- DIRTY 001: Birthday does NOT match expected date format
+-- DIRTY 002: Birth year indicates age 17 OR YOUNGER (too young)
+-- DIRTY 003: Birth year unrealistically old (<1900)
+-- DIRTY 004: Registration date missing time part
+-- DIRTY 005: Year typo detected (pattern like 10xx)
+-- ==============================================================
+
+SELECT CONCAT(item, ' = ', num) AS `CUSTOMER SUMMARY`
+FROM (
+  SELECT '1. Total Rows'               AS item, COUNT(*) AS num FROM workspace.default.d2e2_cardholders_raw UNION ALL
+  
+  SELECT '2. Unique Customer IDs'      AS item, COUNT(DISTINCT user_id) AS num FROM workspace.default.d2e2_cardholders_raw UNION ALL
+ 
+  SELECT '3. DIRTY 001 Bad Format'     AS item, SUM(CASE WHEN TRY_TO_DATE(birthday,'M/d/yy') IS NULL AND TRY_TO_DATE(birthday,'MM/dd/yyyy') IS NULL THEN 1 ELSE 0 END) AS num FROM workspace.default.d2e2_cardholders_raw UNION ALL
+  
+  SELECT '4. DIRTY 002 Age ≤17'        AS item, SUM(CASE WHEN YEAR(COALESCE(TRY_TO_DATE(birthday,'M/d/yy'),TRY_TO_DATE(birthday,'MM/dd/yyyy'))) >= YEAR(CURRENT_DATE) - 17 THEN 1 ELSE 0 END) AS num FROM workspace.default.d2e2_cardholders_raw UNION ALL
+  
+  SELECT '5. DIRTY 003 Too Old Year'    AS item, SUM(CASE WHEN YEAR(COALESCE(TRY_TO_DATE(birthday,'M/d/yy'),TRY_TO_DATE(birthday,'MM/dd/yyyy')))<1900 THEN 1 ELSE 0 END) AS num FROM workspace.default.d2e2_cardholders_raw UNION ALL
+  
+  SELECT '6. DIRTY 004 Bad Reg Date'    AS item, SUM(CASE WHEN registered_date NOT LIKE '%:%:%' THEN 1 ELSE 0 END) AS num FROM workspace.default.d2e2_cardholders_raw UNION ALL
+  
+  SELECT '7. DIRTY 005 Year Typo'       AS item, SUM(CASE WHEN TRIM(birthday) LIKE '%/10%' THEN 1 ELSE 0 END) AS num FROM workspace.default.d2e2_cardholders_raw
+)
+ORDER BY item;
