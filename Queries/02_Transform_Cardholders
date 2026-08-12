@@ -4,7 +4,10 @@
 
 -- ==============================================================
 -- DATA TRANSFORMING: Clean and fix birthdays
+-- ==============================================================
 -- PURPOSE: Convert text dates to real dates AND fix wrong years
+-- REASON: Raw data had "bad" years: 10xx
+-- FIX: Try both short & long date formats to get valid date
 -- RULEs: Year ≥2070 OR ≥2008 - subtract 100 years; else keep as-is
 -- ==============================================================
 
