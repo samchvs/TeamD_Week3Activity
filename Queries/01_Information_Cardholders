@@ -3,7 +3,7 @@
 -- **************************************************************
 
 -- ==============================================================
--- PURPOSE: Count rows AND all data quality issues
+-- PURPOSE: Count rows AND all data quality issues (after manual)
 -- ==============================================================
 -- DIRTY 001: Birthday does NOT match expected date format
 -- DIRTY 002: Birth year indicates age 17 OR YOUNGER (too young)
