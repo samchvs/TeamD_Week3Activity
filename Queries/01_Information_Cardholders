@@ -14,18 +14,30 @@
 
 SELECT CONCAT(item, ' = ', num) AS `CUSTOMER SUMMARY`
 FROM (
+-- COUNT ALL RECORDS IN THE FILE
   SELECT '1. Total Rows'               AS item, COUNT(*) AS num FROM workspace.default.d2e2_cardholders_raw UNION ALL
   
+-- COUNT ONLY DIFFERENT/UNIQUE CUSTOMER IDs (remove duplicates)
   SELECT '2. Unique Customer IDs'      AS item, COUNT(DISTINCT user_id) AS num FROM workspace.default.d2e2_cardholders_raw UNION ALL
  
+-- DIRTY 001: Check BIRTHDAY FORMAT
+-- COMPARE: Try format "M/d/yy" → fails? Try format "MM/dd/yyyy" → also fails? → COUNT AS BAD
   SELECT '3. DIRTY 001 Bad Format'     AS item, SUM(CASE WHEN TRY_TO_DATE(birthday,'M/d/yy') IS NULL AND TRY_TO_DATE(birthday,'MM/dd/yyyy') IS NULL THEN 1 ELSE 0 END) AS num FROM workspace.default.d2e2_cardholders_raw UNION ALL
   
+-- DIRTY 002: Check AGE (17 or younger = too young)
+-- COMPARE: Birth year ≥ [this year minus 17] → person is 17 or younger → COUNT AS BAD
   SELECT '4. DIRTY 002 Age ≤17'        AS item, SUM(CASE WHEN YEAR(COALESCE(TRY_TO_DATE(birthday,'M/d/yy'),TRY_TO_DATE(birthday,'MM/dd/yyyy'))) >= YEAR(CURRENT_DATE) - 17 THEN 1 ELSE 0 END) AS num FROM workspace.default.d2e2_cardholders_raw UNION ALL
   
+-- DIRTY 003: Check BIRTH YEAR TOO OLD
+-- COMPARE: Birth year < 1900 → unrealistically old → COUNT AS BAD
   SELECT '5. DIRTY 003 Too Old Year'    AS item, SUM(CASE WHEN YEAR(COALESCE(TRY_TO_DATE(birthday,'M/d/yy'),TRY_TO_DATE(birthday,'MM/dd/yyyy')))<1900 THEN 1 ELSE 0 END) AS num FROM workspace.default.d2e2_cardholders_raw UNION ALL
   
+-- DIRTY 004: Check REGISTRATION DATE FORMAT
+-- COMPARE: Date does NOT contain "hours:minutes:seconds" pattern → COUNT AS BAD
   SELECT '6. DIRTY 004 Bad Reg Date'    AS item, SUM(CASE WHEN registered_date NOT LIKE '%:%:%' THEN 1 ELSE 0 END) AS num FROM workspace.default.d2e2_cardholders_raw UNION ALL
   
+-- DIRTY 005: Check YEAR TYPO
+-- COMPARE: Birthday contains "/10" pattern (like 1008) → likely typo → COUNT AS BAD
   SELECT '7. DIRTY 005 Year Typo'       AS item, SUM(CASE WHEN TRIM(birthday) LIKE '%/10%' THEN 1 ELSE 0 END) AS num FROM workspace.default.d2e2_cardholders_raw
 )
 ORDER BY item;
