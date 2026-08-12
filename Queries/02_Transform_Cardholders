@@ -3,47 +3,64 @@
 -- **************************************************************
 
 -- ==============================================================
--- DATA TRANSFORMING: Clean and fix birthdays
--- ==============================================================
 -- PURPOSE: Convert text dates to real dates AND fix wrong years
--- REASON: Raw data had "bad" years: 10xx
--- FIX 0001: Try both short & long date formats to get valid date
--- RULEs: Year ≥2070 OR ≥2008 - subtract 100 years; else keep as-is
+-- REASON: Raw data had "typo years" like 10xx --> became 20xx
+-- RULES: Year >=2070 OR >=2008 --> subtract 100 years; else keep as is
 -- ==============================================================
+-- FIX 001: Convert birthday text to valid date ....................... FIXES DIRTY 001
+-- FIX 002: Birth year >= 2070 --> subtract 100 years (correct typo) .. FIXES DIRTY 005
+-- FIX 003: Birth year >= 2008 --> subtract 100 years (correct typo) .. FIXES DIRTY 005
+-- FIX 004: Convert registration date text to valid date .............. FIXES DIRTY 004
 
--- --------------------------------------------------------------
--- PART 2A: FIX BIRTHDAYS
--- --------------------------------------------------------------
+-- ==============================================================
+-- DIRTY DATAS
+-- ==============================================================
+-- DIRTY 001: Birthday does NOT match expected date format
+-- DIRTY 002: Birth year indicates age 17 OR YOUNGER (too young)
+-- DIRTY 003: Birth year unrealistically old (<1900)
+-- DIRTY 004: Registration date missing time part
+-- DIRTY 005: Year typo detected (pattern like 10xx)
+
 SELECT
   user_id,
--- 2A. Fix birthday: correct year or age where needed
+-- --------------------------------------------------------------
+-- FIX 001 & 002 & 003: FIX BIRTHDAY
+-- --------------------------------------------------------------
+-- COMPARE: If year ≥2070 --> subtract 100 years --> KEEP MONTH & DAY .. CORRECTS DIRTY 005
+-- COMPARE: If year ≥2008 --> subtract 100 years --> KEEP MONTH & DAY .. CORRECTS DIRTY 005
+-- COMPARE: All other years --> keep original converted date
+-- --------------------------------------------------------------
   CASE
     WHEN YEAR(converted_date) >= 2070
-      THEN TO_DATE( STRING(YEAR(converted_date) - 100), "yyyy" )
+      THEN ADD_MONTHS(converted_date, -1200)  -- Subtract 100 years .. CORRECTS DIRTY 005
     WHEN YEAR(converted_date) >= 2008
-      THEN TO_DATE( STRING(YEAR(converted_date)), "yyyy" )
+      THEN ADD_MONTHS(converted_date, -1200)  -- Subtract 100 years .. CORRECTS DIRTY 005
     ELSE converted_date
-  END AS birthday
+  END AS birthday,
 
 -- --------------------------------------------------------------
--- PART 2B: CONVERT REGISTRATION DATE STRING TO DATE FORMATE
+-- FIX 004: CONVERT REGISTRATION DATE TO REAL DATE FORMAT
 -- --------------------------------------------------------------
+-- COMPARE: Try full datetime format first --> fallback to date-only format .. FIXES DIRTY 004
+-- --------------------------------------------------------------
+  COALESCE(
+    TRY_TO_DATE(registered_date, "yyyy-MM-dd HH:mm:ss"),
+    TRY_TO_DATE(registered_date, "MM/dd/yyyy HH:mm:ss"),
+    TRY_TO_DATE(registered_date, "M/d/yyyy")
+  ) AS registered_date
 
-
 -- --------------------------------------------------------------
--- PART 2C: CONVERT REGISTRATION DATE
--- --------------------------------------------------------------
-
--- --------------------------------------------------------------
--- COVERSION OF TEXT TO DATE FORMAT
+-- CONVERSION OF TEXT TO DATE FORMAT
 -- --------------------------------------------------------------
 FROM (
---2B convert text TO real date: try either short format first or long format backup
+-- FIX 001: Convert birthday text TO real date: try short format first --> backup long format .. FIXES DIRTY 001
   SELECT
     user_id,
+    registered_date,
     COALESCE(
       TRY_TO_DATE(birthday, "M/d/yy"),
       TRY_TO_DATE(birthday, "MM/dd/yyyy")
     ) AS converted_date
   FROM workspace.default.d2e2_cardholders_raw
 )
+ORDER BY user_id;
