@@ -18,7 +18,7 @@ SELECT
     WHEN YEAR(converted_date) >= 2070
       THEN TO_DATE( STRING(YEAR(converted_date) - 100), "yyyy" )
     WHEN YEAR(converted_date) >= 2008
-      THEN TO_DATE( STRING(YEAR(converted_date) - 100), "yyyy" )
+      THEN TO_DATE( STRING(YEAR(converted_date)), "yyyy" )
     ELSE converted_date
   END AS birthday
 
