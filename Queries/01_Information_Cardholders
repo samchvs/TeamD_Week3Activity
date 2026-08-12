@@ -5,7 +5,7 @@
 -- ==============================================================
 -- PURPOSE: Count rows AND all data quality issues
 -- ==============================================================
--- DIRTY 001: Birthday does NOT match expected date format
+-- DIRTY 001: Birthday does NOT match expected date format (YYYY-MM-DD)
 -- DIRTY 002: Birth year indicates age 17 OR YOUNGER (too young)
 -- DIRTY 003: Birth year unrealistically old (<1900)
 -- DIRTY 004: Registration date missing time part
@@ -21,16 +21,24 @@ FROM (
   SELECT '2. Unique Customer IDs'      AS item, COUNT(DISTINCT user_id) AS num FROM workspace.default.d2e2_cardholders_raw UNION ALL
  
 -- DIRTY 001: Check the birthday format
--- COMPARE: Try format "M/d/yy" --> fails? Try format "MM/dd/yyyy" --> also fails? --> COUNT AS BAD
-  SELECT '3. DIRTY 001 Birthday Format'     AS item, SUM(CASE WHEN TRY_TO_DATE(birthday,'M/d/yy') IS NULL AND TRY_TO_DATE(birthday,'MM/dd/yyyy') IS NULL THEN 1 ELSE 0 END) AS num FROM workspace.default.d2e2_cardholders_raw UNION ALL
+-- COMPARE: Does NOT match expected "YYYY-MM-DD" format? --> COUNT AS BAD
+  SELECT '3. DIRTY 001 Birthday Format'     AS item, SUM(CASE WHEN TRY_TO_DATE(birthday, "yyyy-MM-DD") IS NULL THEN 1 ELSE 0 END) AS num FROM workspace.default.d2e2_cardholders_raw UNION ALL
   
 -- DIRTY 002: Check AGE (17 or younger = too young)
--- COMPARE: If either format works AND birth year >= [this year minus 17] --> COUNT AS BAD
-  SELECT '4. DIRTY 002 Age ≤17'        AS item, SUM(CASE WHEN YEAR(TRY_TO_DATE(birthday,'M/d/yy')) >= YEAR(CURRENT_DATE) - 17 OR YEAR(TRY_TO_DATE(birthday,'MM/dd/yyyy')) >= YEAR(CURRENT_DATE) - 17 THEN 1 ELSE 0 END) AS num FROM workspace.default.d2e2_cardholders_raw UNION ALL
+-- COMPARE: Analyze date using OUR standard format first --> fallback to others --> if year >= [this year minus 17] --> COUNT AS BAD
+  SELECT '4. DIRTY 002 Age ≤17'        AS item, SUM(CASE WHEN YEAR(COALESCE(
+           TRY_TO_DATE(birthday, "yyyy-MM-dd"),
+           TRY_TO_DATE(birthday, "M/d/yy"),
+           TRY_TO_DATE(birthday, "MM/dd/yyyy")
+         )) >= YEAR(CURRENT_DATE) - 17 THEN 1 ELSE 0 END) AS num FROM workspace.default.d2e2_cardholders_raw UNION ALL
   
 -- DIRTY 003: Check BIRTH YEAR TOO OLD
--- COMPARE: If either format works AND birth year < 1900 --> COUNT AS BAD
-  SELECT '5. DIRTY 003 Too Old Year'    AS item, SUM(CASE WHEN YEAR(TRY_TO_DATE(birthday,'M/d/yy')) < 1900 OR YEAR(TRY_TO_DATE(birthday,'MM/dd/yyyy')) < 1900 THEN 1 ELSE 0 END) AS num FROM workspace.default.d2e2_cardholders_raw UNION ALL
+-- COMPARE: Parse date using YOUR standard format first --> fallback to others → if year < 1900 --> COUNT AS BAD
+  SELECT '5. DIRTY 003 Too Old Year'    AS item, SUM(CASE WHEN YEAR(COALESCE(
+           TRY_TO_DATE(birthday, "yyyy-MM-dd"),
+           TRY_TO_DATE(birthday, "M/d/yy"),
+           TRY_TO_DATE(birthday, "MM/dd/yyyy")
+         )) < 1900 THEN 1 ELSE 0 END) AS num FROM workspace.default.d2e2_cardholders_raw UNION ALL
   
 -- DIRTY 004: Check registration date format
 -- COMPARE: Date does NOT contain "hours:minutes:seconds" pattern --> COUNT AS BAD
