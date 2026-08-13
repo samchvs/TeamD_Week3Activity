@@ -1,17 +1,17 @@
 -- **************************************************************
--- TRANSFORMING CARDHOLDERS
+-- TRANSFORMING CARDHOLDERS (ongoing)
 -- **************************************************************
-
 -- ==============================================================
 -- PURPOSE: Convert text dates to real dates AND fix wrong years
 -- REASON: Raw data had "typo years" like 10xx --> became 20xx
--- RULES: Year >=2070 OR >=2008 --> subtract 100 years; else keep as is
+-- RULES: Year BETWEEN 1000 AND 1099 --> add 1000 years
+--        Year >=2070 OR >=2008 --> subtract 100 years; else keep as is
 -- ==============================================================
 -- FIX 001: Convert birthday text to valid date ....................... FIXES DIRTY 001
--- FIX 002: Birth year >= 2070 --> subtract 100 years (correct typo) .. FIXES DIRTY 005
--- FIX 003: Birth year >= 2008 --> subtract 100 years (correct typo) .. FIXES DIRTY 005
--- FIX 004: Convert registration date text to valid date .............. FIXES DIRTY 004
-
+-- FIX 002: Birth year BETWEEN 1000 AND 1099 --> add 1000 years ....... FIXES DIRTY 005
+-- FIX 003: Birth year >= 2070 --> subtract 100 years (correct typo) .. FIXES DIRTY 005
+-- FIX 004: Birth year >= 2008 --> subtract 100 years (correct typo) .. FIXES DIRTY 005
+-- FIX 005: Convert registration date text to valid date .............. FIXES DIRTY 004
 -- ==============================================================
 -- DIRTY DATAS
 -- ==============================================================
@@ -19,27 +19,28 @@
 -- DIRTY 002: Birth year indicates age 17 OR YOUNGER (too young)
 -- DIRTY 003: Birth year unrealistically old (<1900)
 -- DIRTY 004: Registration date missing time part
--- DIRTY 005: Year typo detected (pattern like 10xx)
-
+-- DIRTY 005: Year typo detected (pattern like 10xx, or 2070+/2008+)
 SELECT
   user_id,
 -- --------------------------------------------------------------
--- FIX 001 & 002 & 003: FIX BIRTHDAY
+-- FIX 001 & 002 & 003 & 004: FIX BIRTHDAY
 -- --------------------------------------------------------------
--- COMPARE: If year ≥2070 --> subtract 100 years --> KEEP MONTH & DAY .. CORRECTS DIRTY 005
--- COMPARE: If year ≥2008 --> subtract 100 years --> KEEP MONTH & DAY .. CORRECTS DIRTY 005
+-- COMPARE: If year BETWEEN 1000-1099 --> add 1000 years --> KEEP MONTH & DAY .. CORRECTS DIRTY 005 
+-- COMPARE: If year ≥2070 --> subtract 100 years --> KEEP MONTH & DAY .......... CORRECTS DIRTY 005
+-- COMPARE: If year ≥2008 --> subtract 100 years --> KEEP MONTH & DAY .......... CORRECTS DIRTY 005
 -- COMPARE: All other years --> keep original converted date
 -- --------------------------------------------------------------
   CASE
+    WHEN YEAR(converted_date) BETWEEN 1000 AND 1099
+      THEN ADD_MONTHS(converted_date, 12000)  -- Add 1000 years .... CORRECTS DIRTY 005 
     WHEN YEAR(converted_date) >= 2070
       THEN ADD_MONTHS(converted_date, -1200)  -- Subtract 100 years .. CORRECTS DIRTY 005
     WHEN YEAR(converted_date) >= 2008
       THEN ADD_MONTHS(converted_date, -1200)  -- Subtract 100 years .. CORRECTS DIRTY 005
     ELSE converted_date
   END AS birthday,
-
 -- --------------------------------------------------------------
--- FIX 004: CONVERT REGISTRATION DATE TO REAL DATE FORMAT
+-- FIX 005: CONVERT REGISTRATION DATE TO REAL DATE FORMAT
 -- --------------------------------------------------------------
 -- COMPARE: Try full datetime format first --> fallback to date-only format .. FIXES DIRTY 004
 -- --------------------------------------------------------------
@@ -48,7 +49,6 @@ SELECT
     TRY_TO_DATE(registered_date, "MM/dd/yyyy HH:mm:ss"),
     TRY_TO_DATE(registered_date, "M/d/yyyy")
   ) AS registered_date
-
 -- --------------------------------------------------------------
 -- CONVERSION OF TEXT TO DATE FORMAT
 -- --------------------------------------------------------------
