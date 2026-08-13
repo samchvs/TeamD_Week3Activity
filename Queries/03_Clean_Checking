@@ -1,0 +1,2 @@
+SELECT COUNT(*) FROM workspace.default.transactions_clean;
+SELECT * FROM workspace.default.transactions_clean LIMIT 10;
