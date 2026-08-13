@@ -1,0 +1,194 @@
+-- **************************************************************
+-- INFORMATION REPORT: TRANSACTIONS
+-- **************************************************************
+-- ==============================================================
+-- PURPOSE: Count rows AND all data quality issues
+-- REASON: Raw data has date inconsistencies, dirty SKU text, brand
+--         mismatches, branch typos, and price/quantity outliers
+-- RULES: Each block below tests ONE data quality issue and returns a count
+-- ==============================================================
+-- CHECK 001: Count total rows ......................................... (no dirty check)
+-- CHECK 002: Count unique customer IDs ................................ (no dirty check)
+-- CHECK 003: Count unique transaction IDs (receipts) .................. (no dirty check)
+-- CHECK 004: receipt_date does not match a known format ............... CHECKS DIRTY 001
+-- CHECK 005: receipt_date year differs from transaction_date year ..... CHECKS DIRTY 002
+-- CHECK 006: receipt_date year unrealistically far in the future ...... CHECKS DIRTY 003
+-- CHECK 007: transaction_date falls outside Jun-Dec 2024 .............. CHECKS DIRTY 004
+-- CHECK 008: product_sku contains special characters (/, \, ?, *, &) .. CHECKS DIRTY 005
+-- CHECK 009: product_sku has doubled/irregular internal spacing ....... CHECKS DIRTY 006
+-- CHECK 010: product_sku duplicates another SKU after normalizing ..... CHECKS DIRTY 007
+-- CHECK 011: product_brand is NULL ..................................... CHECKS DIRTY 008
+-- CHECK 012: product_brand disagrees with the brand implied by the SKU  CHECKS DIRTY 009
+-- CHECK 013: branch name contains "EASTMART" typo (should be EASYMART)  CHECKS DIRTY 010
+-- CHECK 014: quantity equals zero ...................................... CHECKS DIRTY 011
+-- CHECK 015: total_unit_price is <= 1 (near-zero) ...................... CHECKS DIRTY 012
+-- CHECK 016: total_unit_price is a statistical high-end outlier ........ CHECKS DIRTY 013
+-- CHECK 017: possible duplicate transaction line items ................. CHECKS DIRTY 014 (NEW)
+-- ==============================================================
+-- DIRTY DATAS
+-- ==============================================================
+-- DIRTY 001: receipt_date does NOT match any expected date format
+-- DIRTY 002: receipt_date year does not match transaction_date year (no decision given yet)
+-- DIRTY 003: receipt_date year unrealistically far in the future (decision: ignore)
+-- DIRTY 004: transaction_date outside the expected Jun-Dec 2024 window
+-- DIRTY 005: product_sku contains special characters that break downstream systems (decision: remove OR FLAG)
+-- DIRTY 006: product_sku has irregular/doubled spacing (decision: normalize)
+-- DIRTY 007: product_sku is a duplicate of another SKU once special chars/spacing are stripped (no decision given yet)
+-- DIRTY 008: product_brand is NULL (decision: backfill from matching product's brand)
+-- DIRTY 009: product_brand does not match the brand implied by the SKU text (decision: correct)
+-- DIRTY 010: branch name misspelled "EASTMART" instead of "EASYMART" (decision: correct)
+-- DIRTY 011: quantity = 0 (decision: remove record)
+-- DIRTY 012: total_unit_price <= 1 (decision: retain, do NOT impute from other retailers/branches)
+-- DIRTY 013: total_unit_price is an unusually high outlier (decision: pending)
+-- DIRTY 014: same customer/SKU/dates/qty/price but different transaction_id or receipt_number (decision: pending -- NEW, not in original notes)
+
+SELECT CONCAT(item, ' = ', num) AS `TRANSACTION SUMMARY`
+FROM (
+-- --------------------------------------------------------------
+-- CHECK 001: TOTAL ROW COUNT
+-- --------------------------------------------------------------
+-- COMPARE: Count every row in the raw table --> baseline count
+  SELECT 1 AS sort_order, 'Total Rows'                       AS item, COUNT(*) AS num FROM workspace.default.d2e2_transactions_raw UNION ALL
+
+-- --------------------------------------------------------------
+-- CHECK 002: UNIQUE CUSTOMER ID COUNT
+-- --------------------------------------------------------------
+-- COMPARE: Count DISTINCT customer_id --> baseline count
+  SELECT 2 AS sort_order, 'Unique Customer IDs'              AS item, COUNT(DISTINCT `# customer_id`) AS num FROM workspace.default.d2e2_transactions_raw UNION ALL
+
+-- --------------------------------------------------------------
+-- CHECK 003: UNIQUE TRANSACTION ID COUNT
+-- --------------------------------------------------------------
+-- COMPARE: Count DISTINCT transaction_id --> baseline count (one receipt can have many line items)
+  SELECT 3 AS sort_order, 'Unique Transaction IDs'           AS item, COUNT(DISTINCT transaction_id) AS num FROM workspace.default.d2e2_transactions_raw UNION ALL
+
+-- --------------------------------------------------------------
+-- CHECK 004: RECEIPT DATE FORMAT
+-- --------------------------------------------------------------
+-- COMPARE: Does NOT match any known receipt_date format --> COUNT AS BAD .. DETECTS DIRTY 001
+-- NOTE: format list is a best guess -- confirm the true raw text formats and adjust if needed
+  SELECT 4 AS sort_order, '1. DIRTY 001 Receipt Date Format'    AS item, SUM(CASE WHEN COALESCE(
+           TRY_TO_DATE(receipt_date, "yyyy-MM-dd HH:mm:ss"),
+           TRY_TO_DATE(receipt_date, "MM/dd/yyyy HH:mm:ss"),
+           TRY_TO_DATE(receipt_date, "M/d/yyyy H:mm"),
+           TRY_TO_DATE(receipt_date, "yyyy-MM-dd")
+         ) IS NULL THEN 1 ELSE 0 END) AS num FROM workspace.default.d2e2_transactions_raw UNION ALL
+
+-- --------------------------------------------------------------
+-- CHECK 005: RECEIPT VS TRANSACTION YEAR MISMATCH
+-- --------------------------------------------------------------
+-- COMPARE: YEAR(receipt_date) != YEAR(transaction_date) --> COUNT AS BAD .. DETECTS DIRTY 002
+  SELECT 5 AS sort_order, '2. DIRTY 002 Receipt/Txn Year Mismatch' AS item, SUM(CASE WHEN YEAR(COALESCE(
+           TRY_TO_DATE(receipt_date, "yyyy-MM-dd HH:mm:ss"),
+           TRY_TO_DATE(receipt_date, "MM/dd/yyyy HH:mm:ss"),
+           TRY_TO_DATE(receipt_date, "M/d/yyyy H:mm"),
+           TRY_TO_DATE(receipt_date, "yyyy-MM-dd")
+         )) != YEAR(COALESCE(
+           TRY_TO_DATE(transaction_date, "yyyy-MM-dd HH:mm:ss"),
+           TRY_TO_DATE(transaction_date, "MM/dd/yyyy HH:mm:ss"),
+           TRY_TO_DATE(transaction_date, "M/d/yyyy H:mm"),
+           TRY_TO_DATE(transaction_date, "yyyy-MM-dd")
+         )) THEN 1 ELSE 0 END) AS num FROM workspace.default.d2e2_transactions_raw UNION ALL
+
+-- --------------------------------------------------------------
+-- CHECK 006: RECEIPT DATE UNREALISTICALLY FAR IN FUTURE
+-- --------------------------------------------------------------
+-- COMPARE: YEAR(receipt_date) > 2026 --> COUNT AS BAD .. DETECTS DIRTY 003
+  SELECT 6 AS sort_order, '3. DIRTY 003 Receipt Date Future Typo' AS item, SUM(CASE WHEN YEAR(COALESCE(
+           TRY_TO_DATE(receipt_date, "yyyy-MM-dd HH:mm:ss"),
+           TRY_TO_DATE(receipt_date, "MM/dd/yyyy HH:mm:ss"),
+           TRY_TO_DATE(receipt_date, "M/d/yyyy H:mm"),
+           TRY_TO_DATE(receipt_date, "yyyy-MM-dd")
+         )) > 2026 THEN 1 ELSE 0 END) AS num FROM workspace.default.d2e2_transactions_raw UNION ALL
+
+-- --------------------------------------------------------------
+-- CHECK 007: TRANSACTION DATE OUT OF EXPECTED RANGE
+-- --------------------------------------------------------------
+-- COMPARE: transaction_date NOT between Jun 2024 and Dec 2024 --> COUNT AS BAD .. DETECTS DIRTY 004
+  SELECT 7 AS sort_order, '4. DIRTY 004 Txn Date Out Of Range'  AS item, SUM(CASE WHEN COALESCE(
+           TRY_TO_DATE(transaction_date, "yyyy-MM-dd HH:mm:ss"),
+           TRY_TO_DATE(transaction_date, "MM/dd/yyyy HH:mm:ss"),
+           TRY_TO_DATE(transaction_date, "M/d/yyyy H:mm"),
+           TRY_TO_DATE(transaction_date, "yyyy-MM-dd")
+         ) NOT BETWEEN '2024-06-01' AND '2024-12-31 23:59:59' THEN 1 ELSE 0 END) AS num FROM workspace.default.d2e2_transactions_raw UNION ALL
+
+-- --------------------------------------------------------------
+-- CHECK 008: PRODUCT SKU SPECIAL CHARACTERS
+-- --------------------------------------------------------------
+-- COMPARE: product_sku contains any of /, \, ?, *, & --> COUNT AS BAD .. DETECTS DIRTY 005
+  SELECT 8 AS sort_order, '5. DIRTY 005 SKU Special Chars'      AS item, SUM(CASE WHEN product_sku RLIKE '[/\\\\?*&]' THEN 1 ELSE 0 END) AS num FROM workspace.default.d2e2_transactions_raw UNION ALL
+
+-- --------------------------------------------------------------
+-- CHECK 009: PRODUCT SKU IRREGULAR SPACING
+-- --------------------------------------------------------------
+-- COMPARE: product_sku has a doubled space OR leading/trailing space --> COUNT AS BAD .. DETECTS DIRTY 006
+  SELECT 9 AS sort_order, '6. DIRTY 006 SKU Spacing'            AS item, SUM(CASE WHEN product_sku LIKE '%  %'
+           OR product_sku != TRIM(product_sku) THEN 1 ELSE 0 END) AS num FROM workspace.default.d2e2_transactions_raw UNION ALL
+
+-- --------------------------------------------------------------
+-- CHECK 010: PRODUCT SKU DUPLICATE AFTER NORMALIZING
+-- --------------------------------------------------------------
+-- COMPARE: strip all non-alphanumeric chars + uppercase --> if that normalized value maps to
+--          MORE THAN ONE distinct raw product_sku --> COUNT AS BAD .. DETECTS DIRTY 007
+  SELECT 10 AS sort_order, '7. DIRTY 007 SKU Duplicates'        AS item, COUNT(*) AS num FROM (
+    SELECT UPPER(REGEXP_REPLACE(product_sku, '[^A-Za-z0-9]', '')) AS norm_sku
+    FROM workspace.default.d2e2_transactions_raw
+    GROUP BY UPPER(REGEXP_REPLACE(product_sku, '[^A-Za-z0-9]', ''))
+    HAVING COUNT(DISTINCT product_sku) > 1
+  ) UNION ALL
+
+-- --------------------------------------------------------------
+-- CHECK 011: PRODUCT BRAND NULL
+-- --------------------------------------------------------------
+-- COMPARE: product_brand IS NULL --> COUNT AS BAD .. DETECTS DIRTY 008
+  SELECT 11 AS sort_order, '8. DIRTY 008 Brand Null'            AS item, SUM(CASE WHEN product_brand IS NULL THEN 1 ELSE 0 END) AS num FROM workspace.default.d2e2_transactions_raw UNION ALL
+
+-- --------------------------------------------------------------
+-- CHECK 012: PRODUCT BRAND MISMATCH VS SKU
+-- --------------------------------------------------------------
+-- COMPARE: product_sku contains "UFC" AND product_brand does NOT contain "UFC" --> COUNT AS BAD .. DETECTS DIRTY 009
+-- NOTE: only tests the UFC/DP case flagged in the notes; widen this pattern if other brand keywords surface
+  SELECT 12 AS sort_order, '9. DIRTY 009 Brand Mismatch'        AS item, SUM(CASE WHEN UPPER(product_sku) LIKE '%UFC%'
+           AND (product_brand IS NULL OR UPPER(product_brand) NOT LIKE '%UFC%') THEN 1 ELSE 0 END) AS num FROM workspace.default.d2e2_transactions_raw UNION ALL
+
+-- --------------------------------------------------------------
+-- CHECK 013: BRANCH NAME TYPO
+-- --------------------------------------------------------------
+-- COMPARE: branch contains "EASTMART" --> COUNT AS BAD .. DETECTS DIRTY 010
+  SELECT 13 AS sort_order, '10. DIRTY 010 Branch Typo'          AS item, SUM(CASE WHEN UPPER(branch) LIKE '%EASTMART%' THEN 1 ELSE 0 END) AS num FROM workspace.default.d2e2_transactions_raw UNION ALL
+
+-- --------------------------------------------------------------
+-- CHECK 014: ZERO QUANTITY
+-- --------------------------------------------------------------
+-- COMPARE: quantity = 0 --> COUNT AS BAD .. DETECTS DIRTY 011
+  SELECT 14 AS sort_order, '11. DIRTY 011 Zero Quantity'        AS item, SUM(CASE WHEN quantity = 0 THEN 1 ELSE 0 END) AS num FROM workspace.default.d2e2_transactions_raw UNION ALL
+
+-- --------------------------------------------------------------
+-- CHECK 015: NEAR-ZERO PRICE
+-- --------------------------------------------------------------
+-- COMPARE: total_unit_price <= 1 --> COUNT AS BAD .. DETECTS DIRTY 012
+  SELECT 15 AS sort_order, '12. DIRTY 012 Price <= 1'           AS item, SUM(CASE WHEN total_unit_price <= 1 THEN 1 ELSE 0 END) AS num FROM workspace.default.d2e2_transactions_raw UNION ALL
+
+-- --------------------------------------------------------------
+-- CHECK 016: HIGH-PRICE OUTLIER
+-- --------------------------------------------------------------
+-- COMPARE: total_unit_price > table AVG + 3*STDDEV --> COUNT AS BAD .. DETECTS DIRTY 013
+-- NOTE: 3-sigma threshold is a placeholder -- no cutoff was specified in the notes ("???")
+  SELECT 16 AS sort_order, '13. DIRTY 013 Price Outlier (High)' AS item, SUM(CASE WHEN total_unit_price > (
+           (SELECT AVG(total_unit_price) FROM workspace.default.d2e2_transactions_raw)
+           + 3 * (SELECT STDDEV(total_unit_price) FROM workspace.default.d2e2_transactions_raw)
+         ) THEN 1 ELSE 0 END) AS num FROM workspace.default.d2e2_transactions_raw UNION ALL
+
+-- --------------------------------------------------------------
+-- CHECK 017: POSSIBLE DUPLICATE TRANSACTION LINE ITEMS (NEW)
+-- --------------------------------------------------------------
+-- COMPARE: same customer_id + product_sku + receipt_date + transaction_date + quantity + total_unit_price,
+--          but appearing MORE THAN ONCE (i.e. under different transaction_id/receipt_number) --> COUNT AS BAD .. DETECTS DIRTY 014
+  SELECT 17 AS sort_order, '14. DIRTY 014 Possible Duplicate Txns' AS item, SUM(cnt) AS num FROM (
+    SELECT COUNT(*) AS cnt
+    FROM workspace.default.d2e2_transactions_raw
+    GROUP BY `# customer_id`, product_sku, receipt_date, transaction_date, quantity, total_unit_price
+    HAVING COUNT(*) > 1
+  )
+)
+ORDER BY sort_order;
