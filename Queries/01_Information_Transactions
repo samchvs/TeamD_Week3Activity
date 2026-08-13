@@ -6,6 +6,7 @@
 -- REASON: Raw data has date inconsistencies, dirty SKU text, brand
 --         mismatches, branch typos, and price/quantity outliers
 -- RULES: Each block below tests ONE data quality issue and returns a count
+-- NOTE/s: Includes dirty datas from meeting
 -- ==============================================================
 -- CHECK 001: Count total rows ......................................... (no dirty check)
 -- CHECK 002: Count unique customer IDs ................................ (no dirty check)
@@ -23,7 +24,7 @@
 -- CHECK 014: quantity equals zero ...................................... CHECKS DIRTY 011
 -- CHECK 015: total_unit_price is <= 1 (near-zero) ...................... CHECKS DIRTY 012
 -- CHECK 016: total_unit_price is a statistical high-end outlier ........ CHECKS DIRTY 013
--- CHECK 017: possible duplicate transaction line items ................. CHECKS DIRTY 014 (NEW)
+-- CHECK 017: possible duplicate transaction line items ................. CHECKS DIRTY 014
 -- ==============================================================
 -- DIRTY DATAS
 -- ==============================================================
@@ -180,7 +181,7 @@ FROM (
          ) THEN 1 ELSE 0 END) AS num FROM workspace.default.d2e2_transactions_raw UNION ALL
 
 -- --------------------------------------------------------------
--- CHECK 017: POSSIBLE DUPLICATE TRANSACTION LINE ITEMS (NEW)
+-- CHECK 017: POSSIBLE DUPLICATE TRANSACTION LINE ITEMS
 -- --------------------------------------------------------------
 -- COMPARE: same customer_id + product_sku + receipt_date + transaction_date + quantity + total_unit_price,
 --          but appearing MORE THAN ONCE (i.e. under different transaction_id/receipt_number) --> COUNT AS BAD .. DETECTS DIRTY 014
