@@ -1,51 +1,103 @@
 -- **************************************************************
--- INFORMATION REPORT: CARDHOLDERS 
+-- INFORMATION REPORT: CARDHOLDERS
 -- **************************************************************
-
 -- ==============================================================
 -- PURPOSE: Count rows AND all data quality issues
+-- REASON: Raw data has bad formats, typo years, and impossible dates
+-- RULES: Each block below tests ONE data quality issue and returns a count
 -- ==============================================================
--- DIRTY 001: Birthday does NOT match expected date format (YYYY-MM-DD)
+-- CHECK 001: Count total rows ......................................... (no dirty check)
+-- CHECK 002: Count unique customer IDs ................................ (no dirty check)
+-- CHECK 003: Birthday does not match expected format .................. CHECKS DIRTY 001
+-- CHECK 004: Birth year indicates age 17 or younger ................... CHECKS DIRTY 002
+-- CHECK 005: Birth year unrealistically old (<1900) .................... CHECKS DIRTY 003
+-- CHECK 006: Registration date missing time part ....................... CHECKS DIRTY 004
+-- CHECK 007: Year typo detected (pattern like 10xx) ..................... CHECKS DIRTY 005
+-- CHECK 008: Duplicate user_id .......................................... CHECKS DIRTY 006
+-- CHECK 009: Registration date earlier than birthday .................... CHECKS DIRTY 007
+-- ==============================================================
+-- DIRTY DATAS
+-- ==============================================================
+-- DIRTY 001: Birthday does NOT match expected date format (M/d/yy or MM/dd/yyyy)
 -- DIRTY 002: Birth year indicates age 17 OR YOUNGER (too young)
 -- DIRTY 003: Birth year unrealistically old (<1900)
 -- DIRTY 004: Registration date missing time part
 -- DIRTY 005: Year typo detected (pattern like 10xx)
--- ==============================================================
+-- DIRTY 006: Duplicate user_id
+-- DIRTY 007: registered_date earlier than birthday
 
 SELECT CONCAT(item, ' = ', num) AS `CUSTOMER SUMMARY`
 FROM (
--- Count ALL rows in the file
+-- --------------------------------------------------------------
+-- CHECK 001: TOTAL ROW COUNT
+-- --------------------------------------------------------------
+-- COMPARE: Count every row in the raw table --> baseline count
   SELECT '1. Total Rows'               AS item, COUNT(*) AS num FROM workspace.default.d2e2_cardholders_raw UNION ALL
-  
--- Count ONLY DIFFERENT/UNIQUE customer IDs (remove duplicates)
+
+-- --------------------------------------------------------------
+-- CHECK 002: UNIQUE CUSTOMER ID COUNT
+-- --------------------------------------------------------------
+-- COMPARE: Count DISTINCT user_id --> removes duplicates from the count
   SELECT '2. Unique Customer IDs'      AS item, COUNT(DISTINCT user_id) AS num FROM workspace.default.d2e2_cardholders_raw UNION ALL
- 
--- DIRTY 001: Check the birthday format
--- COMPARE: Does NOT match expected "YYYY-MM-DD" format? --> COUNT AS BAD
-  SELECT '3. DIRTY 001 Birthday Format'     AS item, SUM(CASE WHEN TRY_TO_DATE(birthday, "yyyy-MM-DD") IS NULL THEN 1 ELSE 0 END) AS num FROM workspace.default.d2e2_cardholders_raw UNION ALL
-  
--- DIRTY 002: Check AGE (17 or younger = too young)
--- COMPARE: Analyze date using OUR standard format first --> fallback to others --> if year >= [this year minus 17] --> COUNT AS BAD
+
+-- --------------------------------------------------------------
+-- CHECK 003: BIRTHDAY FORMAT
+-- --------------------------------------------------------------
+-- COMPARE: Does NOT match "M/d/yy" AND does NOT match "MM/dd/yyyy" --> COUNT AS BAD .. DETECTS DIRTY 001
+  SELECT '3. DIRTY 001 Birthday Format'     AS item, SUM(CASE WHEN COALESCE(
+           TRY_TO_DATE(birthday, "M/d/yy"),
+           TRY_TO_DATE(birthday, "MM/dd/yyyy")
+         ) IS NULL THEN 1 ELSE 0 END) AS num FROM workspace.default.d2e2_cardholders_raw UNION ALL
+
+-- --------------------------------------------------------------
+-- CHECK 004: AGE 17 OR YOUNGER
+-- --------------------------------------------------------------
+-- COMPARE: Parse date using expected formats --> if year >= [this year minus 17] --> COUNT AS BAD .. DETECTS DIRTY 002
   SELECT '4. DIRTY 002 Age ≤17'        AS item, SUM(CASE WHEN YEAR(COALESCE(
-           TRY_TO_DATE(birthday, "yyyy-MM-dd"),
            TRY_TO_DATE(birthday, "M/d/yy"),
            TRY_TO_DATE(birthday, "MM/dd/yyyy")
          )) >= YEAR(CURRENT_DATE) - 17 THEN 1 ELSE 0 END) AS num FROM workspace.default.d2e2_cardholders_raw UNION ALL
-  
--- DIRTY 003: Check BIRTH YEAR TOO OLD
--- COMPARE: Parse date using YOUR standard format first --> fallback to others → if year < 1900 --> COUNT AS BAD
+
+-- --------------------------------------------------------------
+-- CHECK 005: BIRTH YEAR TOO OLD
+-- --------------------------------------------------------------
+-- COMPARE: Parse date using expected formats --> if year < 1900 --> COUNT AS BAD .. DETECTS DIRTY 003
   SELECT '5. DIRTY 003 Too Old Year'    AS item, SUM(CASE WHEN YEAR(COALESCE(
-           TRY_TO_DATE(birthday, "yyyy-MM-dd"),
            TRY_TO_DATE(birthday, "M/d/yy"),
            TRY_TO_DATE(birthday, "MM/dd/yyyy")
          )) < 1900 THEN 1 ELSE 0 END) AS num FROM workspace.default.d2e2_cardholders_raw UNION ALL
-  
--- DIRTY 004: Check registration date format
--- COMPARE: Date does NOT contain "hours:minutes:seconds" pattern --> COUNT AS BAD
-  SELECT '6. DIRTY 004 Bad Reg Date'    AS item, SUM(CASE WHEN registered_date NOT LIKE '%:%:%' THEN 1 ELSE 0 END) AS num FROM workspace.default.d2e2_cardholders_raw UNION ALL
-  
--- DIRTY 005: Check year type
--- COMPARE: Birthday contains "/10" pattern (like 1008) --> likely typo --> COUNT AS BAD
-  SELECT '7. DIRTY 005 Year Typo'       AS item, SUM(CASE WHEN TRIM(birthday) LIKE '%/10%' THEN 1 ELSE 0 END) AS num FROM workspace.default.d2e2_cardholders_raw
+
+-- --------------------------------------------------------------
+-- CHECK 006: REGISTRATION DATE MISSING TIME
+-- --------------------------------------------------------------
+-- COMPARE: registered_date is NULL OR has fewer than 2 colons (":") --> COUNT AS BAD .. DETECTS DIRTY 004
+  SELECT '6. DIRTY 004 Bad Reg Date'    AS item, SUM(CASE WHEN registered_date IS NULL
+           OR LENGTH(registered_date) - LENGTH(REPLACE(registered_date, ':', '')) < 2
+           THEN 1 ELSE 0 END) AS num FROM workspace.default.d2e2_cardholders_raw UNION ALL
+
+-- --------------------------------------------------------------
+-- CHECK 007: YEAR TYPO PATTERN
+-- --------------------------------------------------------------
+-- COMPARE: Birthday's year segment starts with "10" (e.g. "/1008") --> COUNT AS BAD .. DETECTS DIRTY 005
+  SELECT '7. DIRTY 005 Year Typo'       AS item, SUM(CASE WHEN TRIM(birthday) RLIKE '/10[0-9]{2}$' THEN 1 ELSE 0 END) AS num FROM workspace.default.d2e2_cardholders_raw UNION ALL
+
+-- --------------------------------------------------------------
+-- CHECK 008: DUPLICATE USER ID
+-- --------------------------------------------------------------
+-- COMPARE: Total rows minus DISTINCT user_id count --> every extra occurrence is COUNTED AS BAD .. DETECTS DIRTY 006
+  SELECT '8. DIRTY 006 Duplicate IDs'   AS item, (COUNT(*) - COUNT(DISTINCT user_id)) AS num FROM workspace.default.d2e2_cardholders_raw UNION ALL
+
+-- --------------------------------------------------------------
+-- CHECK 009: REGISTRATION BEFORE BIRTH
+-- --------------------------------------------------------------
+-- COMPARE: Parse both dates using expected formats --> if registered_date < birthday --> COUNT AS BAD .. DETECTS DIRTY 007
+  SELECT '9. DIRTY 007 Reg Before Birth' AS item, SUM(CASE WHEN COALESCE(
+           TRY_TO_DATE(registered_date, "yyyy-MM-dd HH:mm:ss"),
+           TRY_TO_DATE(registered_date, "MM/dd/yyyy HH:mm:ss"),
+           TRY_TO_DATE(registered_date, "M/d/yyyy")
+         ) < COALESCE(
+           TRY_TO_DATE(birthday, "M/d/yy"),
+           TRY_TO_DATE(birthday, "MM/dd/yyyy")
+         ) THEN 1 ELSE 0 END) AS num FROM workspace.default.d2e2_cardholders_raw
 )
 ORDER BY item;
