@@ -1,0 +1,60 @@
+-- **************************************************************
+-- MERGING CLEAN CARDHOLDERS + CLEAN TRANSACTIONS
+-- **************************************************************
+-- ==============================================================
+-- PURPOSE: Combine cardholders_clean and transactions_clean into
+--          one table so every transaction is enriched with the
+--          customer's birthday and registration date
+-- REASON: Both source tables are already cleaned/materialized --
+--         this step only needs to join them, no further fixes
+-- RULES: LEFT JOIN from transactions_clean --> keeps EVERY
+--        transaction, even if its customer_id has no match in
+--        cardholders_clean (those rows get NULL birthday /
+--        registered_date instead of being dropped)
+-- ==============================================================
+-- JOIN 001: transactions_clean.customer_id = cardholders_clean.user_id
+--           .......................................................... LINKS EACH TRANSACTION TO ITS CARDHOLDER
+-- ==============================================================
+-- DIRTY DATAS
+-- ==============================================================
+-- DIRTY 001: transaction's customer_id has no matching user_id in
+--            cardholders_clean -- decision: keep the transaction anyway
+--            (LEFT JOIN), birthday/registered_date come back NULL --
+--            check COUNT of these after running, flag if the number
+--            looks too high to be normal
+-- ==============================================================
+CREATE OR REPLACE TABLE workspace.default.cardholders_transactions_merged AS
+SELECT
+-- --------------------------------------------------------------
+-- COLUMNS FROM transactions_clean (aliased t)
+-- --------------------------------------------------------------
+  t.customer_id,
+-- --------------------------------------------------------------
+-- COLUMNS FROM cardholders_clean (aliased c) -- brought in via JOIN 001
+-- --------------------------------------------------------------
+-- COMPARE: NULL here means this customer_id had no match in
+--          cardholders_clean .......................................... FLAGS DIRTY 001
+-- --------------------------------------------------------------
+  c.birthday,
+  c.registered_date,
+-- --------------------------------------------------------------
+-- REMAINING COLUMNS FROM transactions_clean (aliased t)
+-- --------------------------------------------------------------
+  t.transaction_id,
+  t.receipt_date,
+  t.transaction_date,
+  t.receipt_number,
+  t.product_sku,
+  t.product_brand,
+  t.quantity,
+  t.total_unit_price,
+  t.unit_price,
+  t.retailer,
+  t.branch
+-- --------------------------------------------------------------
+-- JOIN 001: LEFT JOIN keeps every transaction row, even unmatched ones
+-- --------------------------------------------------------------
+FROM workspace.default.transactions_clean t
+LEFT JOIN workspace.default.cardholders_clean c
+  ON t.customer_id = c.user_id
+ORDER BY t.customer_id, t.transaction_id;
