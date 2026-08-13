@@ -1,0 +1,222 @@
+-- ============================================================
+-- 02 DATA CLEANING AND FINAL TABLE
+-- ============================================================
+-- Purpose:
+-- Apply the identified data cleaning and transformation rules
+-- and create the final cleaned transactions table.
+-- ============================================================
+
+
+CREATE OR REPLACE TABLE cleaned_transactions AS
+
+
+-- ============================================================
+-- 1. CLEAN CARDHOLDER DATA
+-- ============================================================
+-- Standardize two-digit birth years and derive customer age.
+-- Invalid/unusable birthday records are excluded later based
+-- on the resulting age.
+-- ============================================================
+
+WITH cleaned_cardholder AS (
+
+    SELECT
+        user_id,
+
+        CASE
+            WHEN user_id <> 9437
+                 AND REGEXP_EXTRACT(
+                     birthday,
+                     '(\\d+)$',
+                     1
+                 )::INT <= 24
+            THEN TO_DATE(
+                REGEXP_REPLACE(
+                    birthday,
+                    '(\\d+)$',
+                    CONCAT(
+                        '20',
+                        REGEXP_EXTRACT(
+                            birthday,
+                            '(\\d+)$',
+                            1
+                        )
+                    )
+                ),
+                'M/d/yyyy'
+            )
+
+            ELSE TO_DATE(
+                REGEXP_REPLACE(
+                    birthday,
+                    '(\\d+)$',
+                    CONCAT(
+                        '19',
+                        REGEXP_EXTRACT(
+                            birthday,
+                            '(\\d+)$',
+                            1
+                        )
+                    )
+                ),
+                'M/d/yyyy'
+            )
+        END AS bday_valid,
+
+        2024 - YEAR(bday_valid) AS age
+
+    FROM cardholders
+
+    WHERE LEN(
+        CAST(
+            REGEXP_EXTRACT(
+                birthday,
+                '(\\d+)$',
+                1
+            ) AS INT
+        )
+    ) <> 4
+),
+
+
+-- ============================================================
+-- 2. CLEAN PRODUCT SKU AND BRAND
+-- ============================================================
+-- Standardize product SKUs by:
+--   - Removing unnecessary characters
+--   - Removing unnecessary spaces
+--   - Converting values to uppercase
+--
+-- Product brands are corrected using the SKU naming pattern
+-- when the original brand is NULL or inconsistent.
+-- ============================================================
+
+cleaned_product_brand AS (
+
+    SELECT DISTINCT
+        product_sku,
+        clean_sku,
+        set_brand
+
+    FROM (
+
+        SELECT DISTINCT
+            product_sku,
+
+            UPPER(
+                TRIM(
+                    REGEXP_REPLACE(
+                        product_sku,
+                        '[^a-zA-Z0-9]',
+                        ''
+                    )
+                )
+            ) AS clean_sku,
+
+            product_brand AS brand_raw,
+
+            CASE
+                WHEN product_sku LIKE '%UFC%'
+                    THEN 'UFC'
+
+                WHEN product_brand IS NULL
+                     AND product_sku LIKE '%DP%'
+                    THEN 'Datu Puti'
+
+                WHEN product_brand IS NULL
+                     AND product_sku LIKE '%UFC%'
+                    THEN 'UFC'
+
+                ELSE product_brand
+            END AS set_brand
+
+        FROM transactions
+
+    ) AS new_product
+),
+
+
+-- ============================================================
+-- 3. CLEAN BRANCH NAMES
+-- ============================================================
+-- Correct the inconsistent branch name "EASTMART"
+-- to "EASYMART".
+-- ============================================================
+
+cleaned_branch AS (
+
+    SELECT DISTINCT
+        branch,
+
+        CASE
+            WHEN branch LIKE '%EASTMART%'
+                THEN REGEXP_REPLACE(
+                    branch,
+                    'EASTMART',
+                    'EASYMART'
+                )
+
+            ELSE branch
+        END AS clean_branch
+
+    FROM transactions
+)
+
+
+-- ============================================================
+-- 4. CREATE FINAL CLEANED TRANSACTIONS TABLE
+-- ============================================================
+
+SELECT
+    t.transaction_id,
+    t.customer_id,
+    t.transaction_date,
+
+    -- Cleaned product information
+    cp.clean_sku AS product_sku,
+    cp.set_brand AS product_brand,
+
+    -- Transaction details
+    t.quantity,
+    ROUND(t.total_unit_price, 2) AS total_price,
+    t.retailer,
+
+    -- Cleaned branch
+    cb.clean_branch AS branch,
+
+    -- Derived customer information
+    cc.age
+
+FROM transactions AS t
+
+LEFT JOIN cleaned_cardholder AS cc
+    ON t.customer_id = cc.user_id
+
+LEFT JOIN cleaned_product_brand AS cp
+    ON t.product_sku = cp.product_sku
+
+LEFT JOIN cleaned_branch AS cb
+    ON t.branch = cb.branch
+
+-- ------------------------------------------------------------
+-- Apply final filtering rules
+-- ------------------------------------------------------------
+-- Remove transactions with:
+--   - Zero or negative quantity
+--   - Zero or negative price
+--   - Customer age outside the accepted range
+-- ------------------------------------------------------------
+
+WHERE t.quantity > 0
+  AND t.total_unit_price > 0
+  AND cc.age >= 18
+  AND cc.age <= 100;
+
+
+-- ============================================================
+-- 5. VERIFY FINAL CLEANED TABLE
+-- ============================================================
+
+SELECT *
+FROM cleaned_transactions
+LIMIT 10;
