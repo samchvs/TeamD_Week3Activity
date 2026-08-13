@@ -1,0 +1,23 @@
+-- **************************************************************
+-- OVERVIEW KPI -- TOTAL REVENUE (single-value counter)
+-- **************************************************************
+-- ==============================================================
+-- PURPOSE: Produce a single number for the "Total Revenue" tile
+--          in the dashboard's Overview section
+-- REASON: Counter-type dashboard widgets need a query that returns
+--         exactly one row and one column -- this is that split-out
+--         version of METRIC 003 from the combined Overview KPIs query
+-- RULES: Pull straight from cardholders_transactions_merged --
+--        no filtering needed, table is already clean and joined
+-- ==============================================================
+-- METRIC 001: total_revenue --> sum of total_unit_price, rounded to 2dp
+-- ==============================================================
+SELECT
+-- --------------------------------------------------------------
+-- METRIC 001: TOTAL REVENUE
+-- --------------------------------------------------------------
+-- COMPARE: SUM across all rows, ROUND to 2 decimal places to
+--          match currency formatting used elsewhere in the pipeline
+-- --------------------------------------------------------------
+  ROUND(SUM(total_unit_price), 2) AS total_revenue
+FROM workspace.default.cardholders_transactions_merged;
