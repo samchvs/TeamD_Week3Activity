@@ -1,0 +1,44 @@
+-- **************************************************************
+-- MONTHLY TRENDS -- TRANSACTION VOLUME & REVENUE OVER TIME
+-- **************************************************************
+-- ==============================================================
+-- PURPOSE: Produce one row per month showing how many transactions
+--          happened and how much revenue was earned
+-- REASON: Powers the two line charts in the dashboard's Trends
+--         section (Monthly Transaction Volume, Monthly Revenue)
+-- RULES: Group by calendar month using transaction_date -- 
+--        DATE_TRUNC snaps every date down to the 1st of its month
+--        so all transactions in the same month land in one row
+-- ==============================================================
+-- METRIC 001: month --> transaction_date truncated to month start
+-- METRIC 002: transaction_count --> distinct transaction_id count per month
+-- METRIC 003: total_revenue --> sum of total_unit_price per month, rounded to 2dp
+-- ==============================================================
+SELECT
+-- --------------------------------------------------------------
+-- METRIC 001: TRUNCATE transaction_date DOWN TO ITS MONTH
+-- --------------------------------------------------------------
+-- COMPARE: DATE_TRUNC('MONTH', ...) turns e.g. 2024-07-15 into
+--          2024-07-01, so every transaction that month groups together
+-- --------------------------------------------------------------
+  DATE_TRUNC('MONTH', transaction_date) AS month,
+-- --------------------------------------------------------------
+-- METRIC 002: COUNT DISTINCT TRANSACTIONS PER MONTH
+-- --------------------------------------------------------------
+-- COMPARE: DISTINCT guards against any accidental row duplication
+--          from the earlier join, same as in the Overview KPIs
+-- --------------------------------------------------------------
+  COUNT(DISTINCT transaction_id) AS transaction_count,
+-- --------------------------------------------------------------
+-- METRIC 003: TOTAL REVENUE PER MONTH
+-- --------------------------------------------------------------
+-- COMPARE: SUM across all rows in that month, ROUND to 2 decimal
+--          places to match currency formatting used elsewhere
+-- --------------------------------------------------------------
+  ROUND(SUM(total_unit_price), 2) AS total_revenue
+FROM workspace.default.cardholders_transactions_merged
+-- --------------------------------------------------------------
+-- GROUP + ORDER: ONE ROW PER MONTH, CHRONOLOGICAL
+-- --------------------------------------------------------------
+GROUP BY DATE_TRUNC('MONTH', transaction_date)
+ORDER BY month;
