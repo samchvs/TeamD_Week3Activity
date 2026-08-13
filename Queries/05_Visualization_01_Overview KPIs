@@ -1,0 +1,39 @@
+-- **************************************************************
+-- OVERVIEW KPIs -- TOTAL CUSTOMERS, TRANSACTIONS, REVENUE
+-- **************************************************************
+-- ==============================================================
+-- PURPOSE: Produce the 3 headline numbers for the dashboard's
+--          Overview section
+-- REASON: These are the top-level counters shown as tiles at the
+--         top of the Retail Performance Dashboard
+-- RULES: Pull straight from cardholders_transactions_merged --
+--        no filtering needed, table is already clean and joined
+-- ==============================================================
+-- METRIC 001: total_customers  --> distinct customer_id count
+-- METRIC 002: total_transactions --> distinct transaction_id count
+-- METRIC 003: total_revenue --> sum of total_unit_price, rounded to 2dp
+-- ==============================================================
+SELECT
+-- --------------------------------------------------------------
+-- METRIC 001: COUNT DISTINCT CUSTOMERS
+-- --------------------------------------------------------------
+-- COMPARE: DISTINCT avoids counting the same customer multiple
+--          times across their many transactions
+-- --------------------------------------------------------------
+  COUNT(DISTINCT customer_id) AS total_customers,
+-- --------------------------------------------------------------
+-- METRIC 002: COUNT DISTINCT TRANSACTIONS
+-- --------------------------------------------------------------
+-- COMPARE: DISTINCT here guards against any accidental row
+--          duplication from the join (each transaction_id should
+--          only match one cardholder, but this keeps the count safe)
+-- --------------------------------------------------------------
+  COUNT(DISTINCT transaction_id) AS total_transactions,
+-- --------------------------------------------------------------
+-- METRIC 003: TOTAL REVENUE
+-- --------------------------------------------------------------
+-- COMPARE: SUM across all rows, ROUND to 2 decimal places to
+--          match currency formatting used elsewhere in the pipeline
+-- --------------------------------------------------------------
+  ROUND(SUM(total_unit_price), 2) AS total_revenue
+FROM workspace.default.cardholders_transactions_merged;
