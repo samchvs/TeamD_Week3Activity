@@ -1,0 +1,45 @@
+-- **************************************************************
+-- TOP 10 PRODUCTS BY REVENUE
+-- **************************************************************
+-- ==============================================================
+-- PURPOSE: Rank products by how much revenue they've generated
+--          and return the top 10
+-- REASON: Powers the "Top 10 Products by Revenue" bar chart in
+--         the dashboard's Product section
+-- RULES: Group by product_sku + product_brand together, since
+--        the same SKU always maps to one brand -- grouping by both
+--        keeps the brand label attached to each SKU in the output
+-- ==============================================================
+-- METRIC 001: total_quantity_sold --> sum of quantity per product
+-- METRIC 002: total_revenue --> sum of total_unit_price per product, rounded to 2dp
+-- RANKING: ORDER BY total_revenue DESC, LIMIT 10 --> keep only the top 10 earners
+-- ==============================================================
+SELECT
+-- --------------------------------------------------------------
+-- GROUPING COLUMNS: PRODUCT IDENTITY
+-- --------------------------------------------------------------
+  product_sku,
+  product_brand,
+-- --------------------------------------------------------------
+-- METRIC 001: TOTAL UNITS SOLD PER PRODUCT
+-- --------------------------------------------------------------
+-- COMPARE: SUM(quantity) across every transaction row for that SKU
+-- --------------------------------------------------------------
+  SUM(quantity) AS total_quantity_sold,
+-- --------------------------------------------------------------
+-- METRIC 002: TOTAL REVENUE PER PRODUCT
+-- --------------------------------------------------------------
+-- COMPARE: SUM across all rows for that SKU, ROUND to 2 decimal
+--          places to match currency formatting used elsewhere
+-- --------------------------------------------------------------
+  ROUND(SUM(total_unit_price), 2) AS total_revenue
+FROM workspace.default.cardholders_transactions_merged
+-- --------------------------------------------------------------
+-- GROUP BY: ONE ROW PER PRODUCT (SKU + BRAND)
+-- --------------------------------------------------------------
+GROUP BY product_sku, product_brand
+-- --------------------------------------------------------------
+-- RANKING: HIGHEST REVENUE FIRST, KEEP ONLY TOP 10
+-- --------------------------------------------------------------
+ORDER BY total_revenue DESC
+LIMIT 10;
