@@ -1,0 +1,214 @@
+-- **************************************************************
+-- TRANSFORMING TRANSACTIONS
+-- **************************************************************
+-- ==============================================================
+-- PURPOSE: Produce a clean version of the transactions table
+-- REASON: Raw data has date inconsistencies, dirty SKU text, brand
+--         mismatches, branch typos, and price/quantity outliers
+-- RULES: Same idea as the earlier version, but written using only
+--        nested SELECTs (no WITH, no window/OVER functions) so it
+--        matches what we've covered so far.
+-- ==============================================================
+-- FIX 001: Convert receipt_date / transaction_date text to real
+--          date+time values ............................................. FIXES DIRTY 001
+-- FIX 002: receipt_date year != transaction_date year -->
+--          shift receipt_date by whole years so its year matches
+--          transaction_date's year (same trick as ADD_MONTHS in
+--          the cardholders script, just using years instead of
+--          the 1000-year/100-year jumps) ............................... FIXES DIRTY 002 (also covers DIRTY 003 -- see note)
+-- FIX 003: Strip special characters out of product_sku ................. FIXES DIRTY 005
+-- FIX 004: Collapse doubled spaces / trim product_sku .................. FIXES DIRTY 006
+-- FIX 005: product_brand disagrees with brand implied by SKU -->
+--          correct it to the SKU-implied brand ......................... FIXES DIRTY 009
+-- FIX 006: product_brand is NULL --> backfill by matching the same
+--          product_sku to a row that already has a brand ............... FIXES DIRTY 008
+-- FIX 007: branch contains "EASTMART" --> correct to "EASYMART" ........ FIXES DIRTY 010
+-- FIX 008: Remove rows where quantity = 0 .............................. FIXES DIRTY 011
+-- FIX 009: Display receipt_date / transaction_date as plain text in
+--          YYYY-MM-DD HH:MM:SS, no extra characters .................... FORMATTING (DTI standard)
+-- FIX 010: Round total_unit_price to 2 decimal places .................. FORMATTING
+-- FIX 011: Add a new unit_price column = total_unit_price / quantity 
+-- ==============================================================
+-- DIRTY DATAS  (decision noted next to each)
+-- ==============================================================
+-- DIRTY 001: receipt_date / transaction_date do NOT match a known text format -- fix: parse defensively
+-- DIRTY 002: receipt_date year != transaction_date year -- fix: trust transaction_date's year, keep DTI format YYYY-MM-DD HH:MM:SS
+-- DIRTY 003: receipt_date year unrealistically far in the future -- decision: ignore (the DIRTY 002 fix already
+--            replaces the bad year on these rows since they are also year-mismatch rows -- see NOTE below)
+-- DIRTY 004: transaction_date outside Jun-Dec 2024 -- checked: 0 rows affected in the source file, so no fix was needed here
+-- DIRTY 005: product_sku contains special characters -- decision: remove.
+--            NOTE: the real file contains more junk characters than the original 5-character guess
+--            ( / \ ? * & ), including $ < × + _ ' -- the rule below removes ANY character that
+--            is not a letter, digit, space, or period, which covers all of them. Confirm this is fine.
+-- DIRTY 006: product_sku has irregular/doubled spacing -- decision: normalize (collapse + trim)
+-- DIRTY 007: product_sku duplicates another SKU after normalizing -- decision: PENDING -- left as-is, not merged (no flag column)
+-- DIRTY 008: product_brand is NULL -- decision: backfill from matching product's (corrected) brand
+-- DIRTY 009: product_brand disagrees with brand implied by SKU -- decision: correct.
+--            NOTE: checked every brand keyword in the real data (UFC, Datu Puti, Silver Swan, Golden
+--            Fiesta, Mang Tomas, Jufran, Hapi Fiesta, Papa) -- the ONLY mismatch pattern that actually
+--            occurs is UFC-labeled SKUs wrongly tagged "Datu Puti", so the CASE below stays narrow
+--            to that confirmed pattern instead of guessing rules for brands that never actually clash.
+-- DIRTY 010: branch name misspelled "EASTMART" instead of "EASYMART" -- decision: correct
+-- DIRTY 011: quantity = 0 -- decision: remove record
+-- DIRTY 012: total_unit_price <= 1 -- decision: retain, do NOT impute -- left completely untouched below
+-- DIRTY 013: total_unit_price is an unusually high outlier -- decision: PENDING -- left as-is, not removed/changed (no flag column)
+-- DIRTY 014: same customer/SKU/dates/qty/price under a different transaction_id/receipt_number -- decision: PENDING -- left as-is (no flag column)
+ 
+-- --------------------------------------------------------------
+-- FIX 009: receipt_date / transaction_date as plain text, no extra
+--          characters -- DATE_FORMAT turns the date+time value into
+--          exactly the string "YYYY-MM-DD HH:MM:SS" .................. FORMATTING (DTI standard)
+-- FIX 010: total_unit_price rounded to 2 decimal places ............... FORMATTING
+-- FIX 011: unit_price = total_unit_price divided by quantity .......... NEW COLUMN
+-- --------------------------------------------------------------
+SELECT
+  `# customer_id`,
+  transaction_id,
+  DATE_FORMAT(receipt_date, 'yyyy-MM-dd HH:mm:ss') AS receipt_date,
+  DATE_FORMAT(transaction_date, 'yyyy-MM-dd HH:mm:ss') AS transaction_date,
+  receipt_number,
+  product_sku,
+  product_brand,
+  quantity,
+  CAST(total_unit_price AS DECIMAL(10,2)) AS total_unit_price,
+  CAST(total_unit_price / quantity AS DECIMAL(10,2)) AS unit_price,
+  retailer,
+  branch
+FROM (
+-- ================================================================
+-- LAYER 6 (FIX 007): FIX BRANCH TYPO ................................. FIXES DIRTY 010
+-- ================================================================
+-- COMPARE: "EASTMART" --> "EASYMART" (the typo always appears in
+--          all-caps in this file, so a plain REPLACE is enough)
+-- ================================================================
+  SELECT
+    `# customer_id`, transaction_id, receipt_date, transaction_date, receipt_number,
+    product_sku, quantity, total_unit_price, retailer,
+    REPLACE(branch, 'EASTMART', 'EASYMART') AS branch,
+    product_brand
+  FROM (
+-- ================================================================
+-- LAYER 5 (FIX 006): BACKFILL NULL product_brand ..................... FIXES DIRTY 008
+-- ================================================================
+-- COMPARE: JOIN each row back to a small lookup table that pairs
+--          every product_sku with the one (already-corrected)
+--          brand it's known to have -- fills in the NULLs only
+-- ================================================================
+    SELECT
+      main.`# customer_id`, main.transaction_id, main.receipt_date, main.transaction_date,
+      main.receipt_number, main.product_sku, main.quantity, main.total_unit_price,
+      main.retailer, main.branch,
+      COALESCE(main.product_brand, lookup.known_brand) AS product_brand
+    FROM (
+-- ================================================================
+-- LAYER 4 (FIX 005): CORRECT product_brand VS SKU .................... FIXES DIRTY 009
+-- ================================================================
+-- COMPARE: SKU text says "UFC" but brand isn't UFC --> correct to UFC
+-- COMPARE: SKU text says Datu Puti but brand isn't Datu Puti --> correct
+-- (leaves NULL brands as NULL -- those get backfilled in LAYER 5)
+-- ================================================================
+      SELECT
+        `# customer_id`, transaction_id, receipt_date, transaction_date, receipt_number,
+        product_sku, quantity, total_unit_price, retailer, branch,
+        CASE
+          WHEN product_brand IS NULL THEN NULL
+          WHEN UPPER(product_sku) LIKE '%UFC%' AND UPPER(product_brand) NOT LIKE '%UFC%'
+            THEN 'UFC'
+          WHEN (UPPER(product_sku) LIKE 'DP %' OR UPPER(product_sku) LIKE '%DATU%' OR UPPER(product_sku) LIKE '%DPUTI%')
+               AND UPPER(product_brand) NOT LIKE '%DATU%'
+            THEN 'Datu Puti'
+          ELSE product_brand
+        END AS product_brand
+      FROM (
+-- ================================================================
+-- LAYER 3 (FIX 003 & 004): CLEAN product_sku ......................... FIXES DIRTY 005, DIRTY 006
+-- ================================================================
+-- COMPARE: replace anything that is not a letter/digit/space/period
+--          with a space (keeps words from jamming together)
+-- COMPARE: collapse repeated spaces into one, then trim the ends
+-- ================================================================
+        SELECT
+          `# customer_id`, transaction_id, receipt_date, transaction_date, receipt_number,
+          TRIM(REGEXP_REPLACE(REGEXP_REPLACE(product_sku, '[^A-Za-z0-9. ]', ' '), '\\s+', ' ')) AS product_sku,
+          product_brand, quantity, total_unit_price, retailer, branch
+        FROM (
+-- ================================================================
+-- LAYER 2 (FIX 002): FIX receipt_date YEAR TO MATCH transaction_date  FIXES DIRTY 002 (and DIRTY 003, see NOTE above)
+-- ================================================================
+-- COMPARE: if the two years don't match, shift receipt_date forward
+--          or backward by however many whole years are needed so
+--          its year lines up with transaction_date's year --
+--          the month/day/time on the receipt stay exactly the same
+-- ================================================================
+          SELECT
+            `# customer_id`, transaction_id,
+            CASE
+              WHEN YEAR(receipt_date) != YEAR(transaction_date)
+                THEN ADD_MONTHS(receipt_date, (YEAR(transaction_date) - YEAR(receipt_date)) * 12)
+              ELSE receipt_date
+            END AS receipt_date,
+            transaction_date, receipt_number, product_sku, product_brand,
+            quantity, total_unit_price, retailer, branch
+          FROM (
+-- ================================================================
+-- LAYER 1 (FIX 001): PARSE TEXT DATES INTO REAL DATE+TIME VALUES ..... FIXES DIRTY 001
+-- ================================================================
+-- COMPARE: try full date+time formats first, fall back to
+--          date-only formats -- TRY_TO_TIMESTAMP is used (not
+--          TRY_TO_DATE) so the time-of-day isn't lost, since we
+--          need it for the year-shift above
+-- ================================================================
+            SELECT
+              `# customer_id`, transaction_id, receipt_number, product_sku, product_brand,
+              quantity, total_unit_price, retailer, branch,
+              COALESCE(
+                TRY_TO_TIMESTAMP(receipt_date, "yyyy-MM-dd HH:mm:ss"),
+                TRY_TO_TIMESTAMP(receipt_date, "MM/dd/yyyy HH:mm:ss"),
+                TRY_TO_TIMESTAMP(receipt_date, "M/d/yyyy H:mm"),
+                TRY_TO_TIMESTAMP(receipt_date, "yyyy-MM-dd")
+              ) AS receipt_date,
+              COALESCE(
+                TRY_TO_TIMESTAMP(transaction_date, "yyyy-MM-dd HH:mm:ss"),
+                TRY_TO_TIMESTAMP(transaction_date, "MM/dd/yyyy HH:mm:ss"),
+                TRY_TO_TIMESTAMP(transaction_date, "M/d/yyyy H:mm"),
+                TRY_TO_TIMESTAMP(transaction_date, "yyyy-MM-dd")
+              ) AS transaction_date
+            FROM workspace.default.d2e2_transactions_raw
+          )
+        )
+      )
+    ) main
+    LEFT JOIN (
+-- --------------------------------------------------------------
+-- LOOKUP TABLE used by LAYER 5's JOIN above
+-- --------------------------------------------------------------
+-- One row per product_sku, holding whatever (corrected) brand
+-- that SKU is already known to have somewhere else in the table.
+-- --------------------------------------------------------------
+      SELECT DISTINCT product_sku, product_brand AS known_brand
+      FROM (
+        SELECT
+          product_sku,
+          CASE
+            WHEN product_brand IS NULL THEN NULL
+            WHEN UPPER(product_sku) LIKE '%UFC%' AND UPPER(product_brand) NOT LIKE '%UFC%'
+              THEN 'UFC'
+            WHEN (UPPER(product_sku) LIKE 'DP %' OR UPPER(product_sku) LIKE '%DATU%' OR UPPER(product_sku) LIKE '%DPUTI%')
+                 AND UPPER(product_brand) NOT LIKE '%DATU%'
+              THEN 'Datu Puti'
+            ELSE product_brand
+          END AS product_brand
+        FROM workspace.default.d2e2_transactions_raw
+      )
+      WHERE product_brand IS NOT NULL
+    ) lookup ON lookup.product_sku = main.product_sku
+  )
+)
+-- --------------------------------------------------------------
+-- FINAL FILTER (FIX 008): DROP quantity = 0 ROWS ...................... FIXES DIRTY 011
+-- --------------------------------------------------------------
+-- NOTE ON DIRTY 012: total_unit_price <= 1 rows are intentionally left
+-- untouched above -- decision was "retain, do not impute."
+-- --------------------------------------------------------------
+WHERE quantity != 0
+ORDER BY `# customer_id`, transaction_id;
