@@ -1,0 +1,26 @@
+CREATE OR REPLACE TABLE workspace.default.customer_transactions_full AS
+SELECT
+  t.customer_id,
+  c.birthday,
+  c.registered_date,
+  c.age_validity_flag,
+
+
+  t.transaction_id,
+  t.receipt_date,
+  t.transaction_date,
+  t.receipt_number,
+  t.product_sku,
+  t.product_brand,
+  t.quantity,
+  t.total_unit_price,
+  t.retailer,
+  t.branch
+
+FROM workspace.default.transactions_cleaned t
+LEFT JOIN workspace.default.customers_cleaned c
+  ON t.customer_id = c.user_id;
+
+
+
+SELECT * FROM workspace.default.customer_transactions_full;
