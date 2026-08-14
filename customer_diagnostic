@@ -1,0 +1,59 @@
+DESCRIBE TABLE workspace.default.customers_csv;
+
+
+
+-- Duplicate checks.
+
+-- Exact duplicate rows: same user_id + birthday + registered_date more than once.
+SELECT user_id, birthday, registered_date, COUNT(*) AS cnt
+FROM workspace.default.customers_csv
+GROUP BY user_id, birthday, registered_date
+HAVING COUNT(*) > 1;
+
+
+
+
+
+
+-- Same user_id appearing multiple times even if other fields differ
+-- (someone re-registered, or an ingestion bug duplicated a row).
+SELECT user_id, COUNT(*) AS cnt
+FROM workspace.default.customers_csv
+GROUP BY user_id
+HAVING COUNT(*) > 1
+ORDER BY cnt DESC;
+
+
+
+
+
+
+
+-- Age outliers: too old (likely a bad year like 1905) or too young
+-- (likely a data-entry slip, example: current year typed instead of birth year).
+-- need i-flag na invalid - not included in the dashboard
+WITH parsed AS (
+  SELECT
+    user_id,
+    birthday,  
+    make_date(
+      CASE
+        WHEN CAST(split(birthday, '/')[2] AS INT) <= 30
+          THEN 2000 + CAST(split(birthday, '/')[2] AS INT)
+        ELSE 1900 + CAST(split(birthday, '/')[2] AS INT)
+      END,
+      CAST(split(birthday, '/')[0] AS INT),   -- month
+      CAST(split(birthday, '/')[1] AS INT)    -- day
+    ) AS birth_date
+  FROM workspace.default.customers_csv
+)
+SELECT
+  user_id,
+  birthday,
+  birth_date,
+  DATEDIFF(YEAR, birth_date, CURRENT_DATE()) AS approx_age
+FROM parsed
+WHERE birth_date IS NOT NULL
+  AND (DATEDIFF(YEAR, birth_date, CURRENT_DATE()) > 100   
+    OR DATEDIFF(YEAR, birth_date, CURRENT_DATE()) < 18)    
+ORDER BY approx_age;
