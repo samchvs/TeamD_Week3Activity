@@ -1,72 +1,112 @@
--- CREATE CLEANED LOYALTY CARDHOLDERS SILVER TABLE --
-CREATE OR REPLACE TABLE loyalty_cardholders_silver AS
-WITH parsed_birthday AS (
-    SELECT
-        user_id,
-        registered_date,
-    
--- PARSE/FORMATTING FOR BIRTHDAYS --
--- COALESCE returns the first successful dates/values, used to allow us to handle different formats
-        COALESCE(
-            TRY_CAST(birthday AS DATE),   -- Tries to convert if already in ISO format (yyyy-MM-dd)
-            TRY_TO_DATE(birthday, 'M/d/yy'), -- Months & days with 2-digit year (7/25/98, 12/5/01)
-            TRY_TO_DATE(birthday, 'M/d/yyyy'), -- Months & days with 4-digit year (7/25/1998)
-            TRY_TO_DATE(birthday, 'MM-dd-yyyy') -- Zero-padded format with dashes (07-25-1998)
-        ) AS parsed_birthday_raw
-    FROM loyalty_cardholders_bronze
-),
 
--- ADJUSTED YEARS FOR THE 2-DIGIT YEAR CENTURY PROBLEM CASE --
--- When 2-digit years like '98' are parsed as 2098 (future), subtract 100 years to get 1998
--- This assumes birthdates should be in the past (no one born in the future can register)
+-- Create a new cleaned customer table.
+-- If the table already exists, REPLACE it with the new results.
+CREATE OR REPLACE TABLE workspace.default.customers_cleaned AS
 
-adjusted_birthday AS (
-    SELECT
-        user_id,
-        registered_date,
-        CASE
-            WHEN parsed_birthday_raw > CURRENT_DATE() 
-                THEN DATE_SUB(parsed_birthday_raw, 100 * 365)  -- minus 100 years (98 -> 1998)
-            ELSE parsed_birthday_raw
-        END AS parsed_birthday
-    FROM parsed_birthday
-)
-
--- VALIDATION RULES OF BIRTHDAYS --
--- 1. must be a VALID DATE
--- 2. cannot be in the FUTURE
--- 3. cannot occur after the REGISTRATION DATE (person must exist before registering)
--- 4. cannot be older than 122 years at registration time (MAXIMUM AGE VALIDATION/oldest verified person)
 SELECT
-    user_id,
-    CAST(registered_date AS DATE) AS registered_date,  -- Convert TIMESTAMP to DATE for consistency
-    CASE 
-        WHEN parsed_birthday IS NULL THEN NULL -- if the bday is an INVALID DATE/cannot be converted
-        WHEN parsed_birthday > CURRENT_DATE() THEN NULL -- if bday is in the FUTURE
-        WHEN parsed_birthday > registered_date THEN NULL -- if bday occurs AFTER registration date
-        WHEN DATEDIFF(registered_date, parsed_birthday) / 365.25 > 122 
-            THEN NULL -- if person was older than 122 years at registration time
-        ELSE parsed_birthday -- if all validation rules are passed
-    END AS birthday,
-    
-    -- DATA QUALITY FLAG: identify rows with data issues
+  -- Keep the customer's unique ID from the original table.
+  user_id,
+
+
+  -- Convert the birthday from text (MM/DD/YY) into a proper DATE format.
+  -- split() separates the birthday into month, day, and year.
+  -- CAST() converts the text values into numbers.
+  -- make_date() combines the year, month, and day into a date.
+  make_date(
+
+    -- Convert the 2-digit year into a 4-digit year.
+    -- If the year is 30 or below, assume it belongs to the 2000s.
+    -- Example: 25 -> 2025
+    -- Otherwise, assume it belongs to the 1900s.
+    -- Example: 85 -> 1985
     CASE
-        WHEN parsed_birthday IS NULL THEN 'INVALID_BIRTHDAY_FORMAT'
-        WHEN parsed_birthday > CURRENT_DATE() THEN 'BIRTHDAY_IN_FUTURE'
-        WHEN parsed_birthday > registered_date THEN 'BIRTHDAY_AFTER_REGISTRATION'
-        WHEN DATEDIFF(registered_date, parsed_birthday) / 365.25 > 122 THEN 'AGE_EXCEEDS_122_YEARS'
-        ELSE 'OK'
-    END AS data_quality_flag
-FROM adjusted_birthday;
+      WHEN CAST(split(birthday, '/')[2] AS INT) <= 30
+        THEN 2000 + CAST(split(birthday, '/')[2] AS INT)
+      ELSE 1900 + CAST(split(birthday, '/')[2] AS INT)
+    END,
+
+    -- Extract the month from the birthday.
+    CAST(split(birthday, '/')[0] AS INT),
+
+    -- Extract the day from the birthday.
+    CAST(split(birthday, '/')[1] AS INT)
+
+  ) AS birthday,
 
 
-  -- Final summary
-  -- SELECT
-   -- COUNT(*) AS total_records,
-   -- COUNT(DISTINCT user_id) AS unique_users,
-   -- MIN(registered_date) AS earliest_registration,
-   -- MAX(registered_date) AS latest_registration,
-   -- MIN(birthday) AS oldest_birthday,
-   -- MAX(birthday) AS youngest_birthday,
-   -- SUM(CASE WHEN birthday IS NULL THEN 1 ELSE 0 END) AS null_birthdays
--- FROM loyalty_cardholders_silver;
+  -- Keep the customer's original registration date.
+  registered_date,
+
+  -- FLAGGING SUSPICIOUS AGES
+  -- Create a flag to identify customers whose calculated age appears unrealistic or likely caused by incorrect data.
+  --
+  -- FLAGGED = age is over 100 or under 18
+  -- VALID   = age is between 18 and 100
+  --
+  -- We keep the FLAGGED records instead of deleting them so that
+  -- we can trace and review the original data later.
+  CASE
+    -- Calculate the customer's age.
+    -- DATEDIFF(YEAR, birthday, CURRENT_DATE()) returns the
+    -- approximate number of years between the birthday and today.
+    --
+    -- If the calculated age is greater than 100,
+    -- mark the record as FLAGGED.
+    WHEN DATEDIFF(
+           YEAR,
+           -- Convert the text birthday into a proper date again.
+           make_date(
+             CASE
+               WHEN CAST(split(birthday, '/')[2] AS INT) <= 30
+                 THEN 2000 + CAST(split(birthday, '/')[2] AS INT)
+               ELSE 1900 + CAST(split(birthday, '/')[2] AS INT)
+             END,
+             -- Month
+             CAST(split(birthday, '/')[0] AS INT),
+
+             -- Day
+             CAST(split(birthday, '/')[1] AS INT)
+           ),
+
+           -- Use today's date as the reference point for calculating age.
+           CURRENT_DATE()
+
+         ) > 100
+      THEN 'FLAGGED'
+
+    -- If the calculated age is below 18,
+    -- mark the record as FLAGGED.
+    WHEN DATEDIFF(
+           YEAR,
+
+           -- Convert the text birthday into a proper date again.
+           make_date(
+             CASE
+               WHEN CAST(split(birthday, '/')[2] AS INT) <= 30
+                 THEN 2000 + CAST(split(birthday, '/')[2] AS INT)
+               ELSE 1900 + CAST(split(birthday, '/')[2] AS INT)
+             END,
+
+             -- Month
+             CAST(split(birthday, '/')[0] AS INT),
+
+             -- Day
+             CAST(split(birthday, '/')[1] AS INT)
+           ),
+
+           -- Use today's date to calculate the age.
+           CURRENT_DATE()
+
+         ) < 18
+      THEN 'FLAGGED'
+
+
+    -- If the age is between 18 and 100,
+    -- consider the birthday data valid.
+    ELSE 'VALID'
+
+  END AS age_validity_flag
+
+-- Get the original customer data from the bronze table.
+-- "bronze" is typically the raw/unprocessed layer in a data pipeline.
+FROM workspace.default.loyalty_cardholders_bronze;
