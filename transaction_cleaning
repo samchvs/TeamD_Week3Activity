@@ -1,0 +1,82 @@
+CREATE OR REPLACE TABLE workspace.default.transactions_cleaned AS
+WITH cleaned_sku AS (
+  SELECT
+    *,
+    -- product_sku: strip special characters/symbols (they break DB imports and
+    -- URL/inventory syncs), collapse extra spaces, trim, uppercase
+    UPPER(TRIM(
+      REGEXP_REPLACE(
+        REGEXP_REPLACE(product_sku, '[^a-zA-Z0-9 ]', ' '),
+        ' +', ' '
+      )
+    )) AS product_sku_clean
+  FROM workspace.default.transactions_csv
+)
+SELECT
+  `# customer_id` AS customer_id,   -- no issues noted, kept as-is
+  transaction_id,
+
+  -- receipt_date: parse whichever format it's in, store as a real TIMESTAMP.
+  -- A proper TIMESTAMP type always displays in ISO (yyyy-MM-dd HH:mm:ss),
+  -- so this satisfies the "everything must be ISO" requirement without
+  -- needing to force it into a text string.
+  COALESCE(
+    TRY_TO_TIMESTAMP(receipt_date, 'yyyy-MM-dd HH:mm:ss'),
+    TRY_TO_TIMESTAMP(receipt_date, 'dd/MM/yyyy HH:mm')
+  ) AS receipt_date,
+  -- Note: the 2024/2025/2026 year mismatch and the one 2080/2094-style
+  -- outlier are left as-is here per your "ignore" decision — not deleted,
+  -- not guessed at. Same for date length — irrelevant, no action taken.
+
+  -- transaction_date: already consistent June-Dec 2024, just force the type
+  -- to TIMESTAMP so it's guaranteed to behave like a real date going forward
+  CAST(transaction_date AS TIMESTAMP) AS transaction_date,
+
+  TRIM(receipt_number) AS receipt_number,
+
+  UPPER(product_sku_clean) AS product_sku,   -- capitalized, special chars removed
+
+  -- product_brand: fixes 2 issues at once —
+  -- (1) the 3 null-brand rows get filled in based on the SKU prefix
+  -- (2) any row where the SKU says UFC but brand was mistakenly tagged DP
+  --     (or vice versa) gets overridden to match the SKU, since the SKU
+  --     is the more reliable signal of the true product
+  UPPER(CASE
+    WHEN product_sku_clean LIKE 'UFC%' THEN 'UFC'
+    WHEN product_sku_clean LIKE 'DP %' OR product_sku_clean LIKE 'DATU PUTI%'
+         OR product_sku_clean LIKE 'DPUTI%' THEN 'Datu Puti'
+    ELSE TRIM(product_brand)
+  END) AS product_brand,
+
+  quantity,
+
+  ROUND(total_unit_price, 2) AS total_unit_price,
+  -- Note: the 4 near-zero-price rows are intentionally left untouched —
+  -- not imputed from other retailers/brands, per your instruction.
+  -- The high-price stddev outliers are also left as-is pending review
+  -- (see diagnostic query above) — no automatic fix applied yet.
+
+  UPPER(retailer) AS retailer,
+  -- Company E branches are already correctly tagged as Puregold in the
+  -- source data — confirmed, no fix needed here.
+
+  -- branch: fix the EASTMART -> EASYMART typo, standardize separators, capitalize
+  UPPER(TRIM(REGEXP_REPLACE(
+    REPLACE(branch, 'EASTMART', 'EASYMART'),
+    '[-–]+', ' - '
+  ))) AS branch
+
+FROM cleaned_sku
+WHERE quantity <> 0;   -- removes the 2 zero-quantity transactions 
+
+
+
+
+
+SELECT * FROM transactions_cleaned
+
+
+
+
+
+
