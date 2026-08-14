@@ -1,0 +1,79 @@
+CREATE OR REPLACE TABLE workspace.default.customers_cleaned AS
+SELECT
+  user_id,
+
+  make_date(
+    CASE
+      WHEN CAST(split(birthday, '/')[2] AS INT) <= 30
+        THEN 2000 + CAST(split(birthday, '/')[2] AS INT)
+      ELSE 1900 + CAST(split(birthday, '/')[2] AS INT)
+    END,
+    CAST(split(birthday, '/')[0] AS INT),   -- month
+    CAST(split(birthday, '/')[1] AS INT)    -- day
+  ) AS birthday,
+
+  registered_date,
+
+  -- age_validity_flag: marks rows where the calculated age is implausible
+  -- (over 100 = likely a bad birth year, under 18 = likely a data-entry slip).
+  -- Kept in the table for traceability, but meant to be excluded from
+  -- dashboards/reporting rather than deleted outright.
+  CASE
+    WHEN DATEDIFF(
+           YEAR,
+           make_date(
+             CASE
+               WHEN CAST(split(birthday, '/')[2] AS INT) <= 30
+                 THEN 2000 + CAST(split(birthday, '/')[2] AS INT)
+               ELSE 1900 + CAST(split(birthday, '/')[2] AS INT)
+             END,
+             CAST(split(birthday, '/')[0] AS INT),
+             CAST(split(birthday, '/')[1] AS INT)
+           ),
+           CURRENT_DATE()
+         ) > 100
+      THEN 'FLAGGED'
+    WHEN DATEDIFF(
+           YEAR,
+           make_date(
+             CASE
+               WHEN CAST(split(birthday, '/')[2] AS INT) <= 30
+                 THEN 2000 + CAST(split(birthday, '/')[2] AS INT)
+               ELSE 1900 + CAST(split(birthday, '/')[2] AS INT)
+             END,
+             CAST(split(birthday, '/')[0] AS INT),
+             CAST(split(birthday, '/')[1] AS INT)
+           ),
+           CURRENT_DATE()
+         ) < 18
+      THEN 'FLAGGED'
+    ELSE 'VALID'
+  END AS age_validity_flag
+
+
+
+
+
+
+
+SELECT * FROM workspace.default.customers_cleaned;
+
+
+
+
+SELECT user_id, birthday, typeof(birthday) AS birthday_type
+FROM workspace.default.customers_csv
+LIMIT 10;
+
+
+
+
+
+
+
+
+
+
+  
+
+FROM workspace.default.customers_csv;
