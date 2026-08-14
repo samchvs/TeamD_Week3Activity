@@ -1,0 +1,140 @@
+-- Zero-price / zero-quantity rows
+SELECT transaction_id, receipt_number, product_sku, quantity, total_unit_price
+FROM workspace.default.transactions_csv
+WHERE total_unit_price = 0
+ORDER BY quantity;
+
+
+
+
+
+
+
+
+
+
+
+-- Missing product_brand despite a recognizable SKU
+SELECT transaction_id, product_sku, product_brand
+FROM workspace.default.transactions_csv
+WHERE product_brand IS NULL OR TRIM(product_brand) = '';
+
+
+
+
+
+
+
+
+
+
+
+
+-- How many SKUs carry special characters/prefixes ($, *MDF_, <<, etc.)
+SELECT COUNT(*) AS messy_sku_rows
+FROM workspace.default.transactions_csv
+WHERE product_sku RLIKE '^[\\$\\*<]';
+
+
+
+
+-- Mixed receipt_date formats — count each pattern
+SELECT
+  CASE
+    WHEN receipt_date RLIKE '^\\d{4}-\\d{2}-\\d{2}[ T]\\d{2}:\\d{2}:\\d{2}$' THEN 'ISO'
+    WHEN receipt_date RLIKE '^\\d{1,2}/\\d{1,2}/\\d{4} \\d{2}:\\d{2}$' THEN 'DD/MM/YYYY HH:MM'
+    ELSE 'OTHER/UNRECOGNIZED'
+  END AS format,
+  COUNT(*) AS row_count
+FROM workspace.default.transactions_csv
+GROUP BY 1;
+
+
+
+
+-- Ordering check, parsing each format correctly first (not just one format for everyone)
+WITH parsed AS (
+  SELECT
+    transaction_id,
+    receipt_number,
+    receipt_date AS receipt_date_raw,
+    transaction_date,
+    COALESCE(
+      TRY_TO_TIMESTAMP(receipt_date, 'yyyy-MM-dd HH:mm:ss'),
+      TRY_TO_TIMESTAMP(receipt_date, 'dd/MM/yyyy HH:mm')
+    ) AS receipt_ts
+  FROM workspace.default.transactions_csv
+)
+SELECT *
+FROM parsed
+WHERE receipt_ts IS NOT NULL
+  AND receipt_ts > transaction_date
+ORDER BY receipt_ts - transaction_date DESC;
+-- large gaps (weeks/months) are almost certainly the DD/MM vs MM/DD mixup,
+-- not genuine backwards timestamps
+
+
+
+-- Branch naming inconsistency — manual check mo
+SELECT retailer, branch, COUNT(*) AS n
+FROM workspace.default.transactions_csv
+GROUP BY retailer, branch
+ORDER BY retailer, branch;
+-- scan this for near-duplicates like PUREGOLD CALOOCAN vs Puregold - Dalandanan
+
+
+
+-- Retailer/branch mismatch candidates —  manual judgment,
+-- di ko gets "doesn't look like a Puregold store"
+SELECT DISTINCT retailer, branch
+FROM workspace.default.transactions_csv
+WHERE retailer = 'Puregold'
+ORDER BY branch;
+
+
+
+-- Document (not "fix") receipt_number
+SELECT COUNT(DISTINCT receipt_number) AS unique_receipts, COUNT(*) AS total_rows
+FROM workspace.default.transactions_csv;
+-- confirms: 1 receipt_number = many rows (one per SKU on that receipt), by design
+
+
+
+
+-- Receipt years vs transaction years — confirms the mismatch you noted
+SELECT
+  YEAR(transaction_date) AS transaction_year,
+  YEAR(TRY_TO_TIMESTAMP(receipt_date, 'yyyy-MM-dd HH:mm:ss')) AS receipt_year_iso,
+  COUNT(*) AS n
+FROM workspace.default.transactions_csv
+GROUP BY 1, 2
+ORDER BY 1, 2;
+
+
+
+
+
+
+
+-- Unit price outliers via standard deviation (mean +/- 3 stddev = "unusually high")
+WITH stats AS (
+  SELECT AVG(total_unit_price) AS avg_price, STDDEV(total_unit_price) AS sd_price
+  FROM workspace.default.transactions_csv
+)
+SELECT t.transaction_id, t.product_sku, t.product_brand, t.total_unit_price
+FROM workspace.default.transactions_csv t, stats
+WHERE t.total_unit_price > stats.avg_price + (3 * stats.sd_price)
+ORDER BY t.total_unit_price DESC;
+
+
+
+
+
+-- Duplicate product names after cleanup (same cleaned SKU, different original spellings)
+SELECT
+  UPPER(TRIM(REGEXP_REPLACE(product_sku, '[^a-zA-Z0-9 ]', ' '))) AS cleaned_name,
+  COUNT(DISTINCT product_sku) AS raw_variants,
+  COLLECT_SET(product_sku) AS examples
+FROM workspace.default.transactions_csv
+GROUP BY 1
+HAVING COUNT(DISTINCT product_sku) > 1;
