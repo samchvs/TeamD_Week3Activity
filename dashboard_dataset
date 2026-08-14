@@ -1,0 +1,12 @@
+SELECT
+  transaction_id,
+  customer_id,
+  branch,
+  retailer,
+  product_brand,
+  transaction_date,
+  product_sku,
+  DATE_TRUNC('WEEK', transaction_date) AS week,
+  quantity,
+  total_unit_price
+FROM workspace.default.customer_transactions_full;
